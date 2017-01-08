@@ -35,6 +35,7 @@ void setup() {
 	
 	for ( int i = 0 ; i < 6 ; i++ ) {
 		pinMode(ctrlIds[i], INPUT );
+		// turn on the pullup resistor.
 		digitalWrite(ctrlIds[i], HIGH);
 	}
 
@@ -94,6 +95,13 @@ void display(byte controller, byte value ) {
 	
 	digitalWrite(RCLK, LOW);
 	digitalWrite(RCLK, HIGH);
+	
+	// switch off all digits so to have same intensity for all 4 digits
+	 
+	shiftOut(DIO, SCLK, MSBFIRST, (0b0000));
+	digitalWrite(RCLK, LOW);
+	digitalWrite(RCLK, HIGH);	
+	
 }
 
 void loop() {
@@ -101,6 +109,8 @@ void loop() {
 	int ctrlValues[6];	
 	for (int i = 0; i < 6 ; i++ ) {
 		byte count[128] = {0};
+		// some magic to get stable reading, basically im sampling the analog input multiple times, and then take the value that
+		// had most occurences as read value. I tried without multiple sampling and the reading was not stable...
 		count[analogRead(ctrlIds[i]) >> 3]++;
 		count[analogRead(ctrlIds[i]) >> 3]++;
 		count[analogRead(ctrlIds[i]) >> 3]++;
