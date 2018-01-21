@@ -1,3 +1,6 @@
+#define OPERATIONAL_STATE HIGH
+#define CONFIGURATION_STATE LOW
+
 #define DEBUG
 
 #ifdef DEBUG
@@ -9,34 +12,53 @@
 #endif
 
 #include <MIDIUSB.h>
+#include <EEPROM.h>
 
-int previousCtrlValues[6];
-int ctrlIds[6];
+byte previousCtrlValues[6];
+byte ctrlPins[6];
+byte ctrlNumbers[6];
+byte state = 0;
+
 
 int SCLK = 5;
 int RCLK = 4;
 int DIO = 3;
 
+byte switchPin = 13;
+
 unsigned char _LED_0F[29];
 
 int lastChangedCtrl = 0;
 
+int blinkIntervalMs = 1;
+bool displayBlinkOff = false;
+byte  previousState = OPERATIONAL_STATE;
+
 void setup() {
-	ctrlIds[0] = A0;
-	ctrlIds[1] = A1;
-	ctrlIds[2] = A2;
-	ctrlIds[3] = A3;
-	ctrlIds[4] = A4;
-	ctrlIds[5] = A5;
+	state = digitalRead(switchPin);
+	previousState = state;
+	
+	ctrlPins[0] = A0;
+	ctrlPins[1] = A1;
+	ctrlPins[2] = A2;
+	ctrlPins[3] = A3;
+	ctrlPins[4] = A4;
+	ctrlPins[5] = A5;
 
 	pinMode(SCLK, OUTPUT);
 	pinMode(RCLK, OUTPUT);
 	pinMode(DIO, OUTPUT);
+	pinMode(switchPin, INPUT);
 	
 	for ( int i = 0 ; i < 6 ; i++ ) {
-		pinMode(ctrlIds[i], INPUT );
+		pinMode(ctrlPins[i], INPUT );
 		// turn on the pullup resistor.
-		digitalWrite(ctrlIds[i], HIGH);
+		digitalWrite(ctrlPins[i], HIGH);
+		
+		byte ctrlNumber = EEPROM.read(i);
+		if ( ctrlNumber > 128 )
+			ctrlNumber = 1;
+		ctrlNumbers[i] = ctrlNumber;
 	}
 
 	_LED_0F[0] = 0xC0; //0
@@ -71,7 +93,17 @@ void setup() {
 	
 }
 
-void display(byte controller, byte value ) {
+void display(byte controller, byte value, bool blink ) {
+	if ( blink ) {
+		blinkIntervalMs--;
+		if ( blinkIntervalMs == 0 ) {
+			println("Blink interval expired")
+			displayBlinkOff = !displayBlinkOff;
+			blinkIntervalMs = 30;
+		}		
+		if(displayBlinkOff)
+			return;
+	}
 	shiftOut(DIO, SCLK, MSBFIRST, _LED_0F[value%10]);	
 	shiftOut(DIO, SCLK, MSBFIRST, (0b0001));
 	
@@ -101,26 +133,51 @@ void display(byte controller, byte value ) {
 	shiftOut(DIO, SCLK, MSBFIRST, (0b0000));
 	digitalWrite(RCLK, LOW);
 	digitalWrite(RCLK, HIGH);	
-	
+}
+
+void sendMIDI(byte ctrlNumber, byte ctrlValue) {
+	midiEventPacket_t event = {0x0B, 0xB0 | 1, ctrlNumber, ctrlValue};				
+	MidiUSB.sendMIDI(event);
+	MidiUSB.flush();	
+}
+
+void saveTOEEPROM() {
+	println("Updating EEPROM");
+	for (int i = 0 ; i < 6 ; i++) {
+		EEPROM.update(i, ctrlNumbers[i]);
+	}
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-	int ctrlValues[6];	
+
+	state = digitalRead(switchPin);
+	if ( state != previousState) {
+		print("State switched to ")
+		previousState = state;
+		// switched state should hold for at least 10 cycles before doing the actual switch, in order to filter out noise.
+		if (state == OPERATIONAL_STATE) {			
+			println("Operational state");
+			saveTOEEPROM();
+		} else {
+			println("Configuration state");
+		}
+	}
+
+	byte ctrlValues[6];
 	for (int i = 0; i < 6 ; i++ ) {
 		byte count[128] = {0};
 		// some magic to get stable reading, basically im sampling the analog input multiple times, and then take the value that
 		// had most occurences as read value. I tried without multiple sampling and the reading was not stable...
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;
-		count[analogRead(ctrlIds[i]) >> 3]++;		
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;
+		count[analogRead(ctrlPins[i]) >> 3]++;		
 		int maxIndex = 0;
 		for ( int j = 0 ; j < 128 ; j++ ) {
 			if ( count[j] > count[maxIndex] ) {
@@ -128,23 +185,18 @@ void loop() {
 			}
 		}
 		ctrlValues[i] =  maxIndex;
-		print("ctrl ");print(i);print(" value "); println(ctrlValues[i]);				
+		//print("ctrl ");print(i);print(" value "); println(ctrlValues[i]);				
 		if ( ctrlValues[i] != previousCtrlValues[i]) {
 			previousCtrlValues[i] = ctrlValues[i];
 			lastChangedCtrl = i;
-			if ( i == 5 ) {
-				midiEventPacket_t event = {0x0B, 0xB0 | 1, 74, ctrlValues[i]};
-				MidiUSB.sendMIDI(event);
-				MidiUSB.flush();
-				}
-			if ( i == 2 ) {
-				midiEventPacket_t event = {0x0B, 0xB0 | 1, 71, ctrlValues[i]};				
-				MidiUSB.sendMIDI(event);
-				MidiUSB.flush();
-			}				
+			if (state == OPERATIONAL_STATE)
+				sendMIDI(ctrlNumbers[i], ctrlValues[i]);
+			else
+				ctrlNumbers[i] = ctrlValues[i];
 			break;
 		}
 	}
-	display(lastChangedCtrl, previousCtrlValues[lastChangedCtrl] );
+	display(lastChangedCtrl, previousCtrlValues[lastChangedCtrl], state == CONFIGURATION_STATE ? true : false );
+	
 	delay(1);
 }
